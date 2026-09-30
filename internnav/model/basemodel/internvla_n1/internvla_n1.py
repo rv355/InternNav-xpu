@@ -318,7 +318,8 @@ class InternVLAN1ForCausalLM(Qwen2_5_VLForConditionalGeneration, InternVLAN1Meta
         )
 
     def generate_latents(self, input_ids, pixel_values, image_grid_thw):
-        input_ids.to(self.get_model().device)
+        input_ids = input_ids.to(self.get_model().embed_tokens.weight.device)
+        image_grid_thw = image_grid_thw.to(input_ids.device)
         with torch.no_grad():
             text_embeds = self.get_model().embed_tokens(input_ids)
         latent_queries = self.get_model().latent_queries.repeat(text_embeds.shape[0], 1, 1)
@@ -326,7 +327,7 @@ class InternVLAN1ForCausalLM(Qwen2_5_VLForConditionalGeneration, InternVLAN1Meta
         N_QUERY = self.get_n_query()
         input_ids = torch.cat([input_ids, torch.tensor([[TRAJ_TOKEN_INDEX] * N_QUERY]).to(input_ids.device)], dim=1)
 
-        pixel_values = pixel_values.type(self.visual.dtype)
+        pixel_values = pixel_values.to(device=self.visual.device, dtype=self.visual.dtype)
         image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw).unsqueeze(0)
 
         text_embeds[image_idx] = image_embeds.to(text_embeds.device)[: image_idx.sum(), :]
@@ -358,13 +359,15 @@ class InternVLAN1ForCausalLM(Qwen2_5_VLForConditionalGeneration, InternVLAN1Meta
     ):
         if 'nextdit' in self.get_system1_type():
             scheduler = FlowMatchEulerDiscreteScheduler()
-            device = traj_latents.device
-            dtype = traj_latents.dtype
+            projector_weight = self.get_model().cond_projector[0].weight
+            device = projector_weight.device
+            dtype = projector_weight.dtype
+            traj_latents = traj_latents.to(device=device, dtype=dtype)
 
             traj_latents = self.get_model().cond_projector(traj_latents)
             if 'async' in self.get_system1_type():
                 with torch.no_grad():
-                    images_dp = images_dp.permute(0, 1, 4, 2, 3)
+                    images_dp = images_dp.to(device=device).permute(0, 1, 4, 2, 3)
                     images_dp_norm = (images_dp - self._resnet_mean) / self._resnet_std
                     self.get_model().rgb_model.to(dtype)
                     images_dp_feat = (

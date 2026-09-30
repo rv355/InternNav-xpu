@@ -81,22 +81,26 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--attn_implementation", choices=['auto', 'flash_attention_2', 'sdpa', 'eager'], default='auto')
     parser.add_argument("--model_path", type=str, default="checkpoints/InternVLA-N1")
     parser.add_argument("--resize_w", type=int, default=384)
     parser.add_argument("--resize_h", type=int, default=384)
     parser.add_argument("--num_history", type=int, default=8)
+    parser.add_argument("--plan_step_gap", type=int, default=4)
+    parser.add_argument("--skip_warmup", action="store_true")
     args = parser.parse_args()
 
     args.camera_intrinsic = np.array(
         [[386.5, 0.0, 328.9, 0.0], [0.0, 386.5, 244, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     )
     agent = InternVLAN1AsyncAgent(args)
-    agent.step(
-        np.zeros((480, 640, 3)),
-        np.zeros((480, 640)),
-        np.eye(4),
-        "hello",
-    )
+    if not args.skip_warmup:
+        agent.step(
+            np.zeros((480, 640, 3)),
+            np.zeros((480, 640)),
+            np.eye(4),
+            "hello",
+        )
     agent.reset()
 
     app.run(host='0.0.0.0', port=5801)

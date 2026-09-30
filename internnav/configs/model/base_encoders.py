@@ -179,6 +179,7 @@ class Seq2Seq(BaseModel, extra='allow'):
 
 
 class ModelCfg(BaseModel, extra='allow'):
+    attn_implementation: str = 'auto'
     policy_name: Optional[str]
     ablate_instruction: Optional[bool] = None
     ablate_depth: Optional[bool] = None
