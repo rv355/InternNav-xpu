@@ -9,6 +9,7 @@ Install the Intel GPU driver and runtime per the
 Then, from the repository root, in a dedicated virtual environment:
 
 ```bash
+git submodule update --init internnav/model/basemodel/LongCLIP
 venv/bin/python -m pip install -r requirements/internvla_n1_xpu.txt
 venv/bin/python -m pip check
 venv/bin/python -c "import torch; assert torch.xpu.is_available(); print(torch.__version__); print(torch.xpu.get_device_properties(0)); print(torch.xpu.mem_get_info(0))"
@@ -29,10 +30,9 @@ sha256sum checkpoints/depth_anything_v2_metric_hypersim_vits.pth
 
 ## Configuration
 
-For policy-based inference, set `device` and `attn_implementation` in the model
-configuration consumed by `ModelCfg` in `internnav/configs/model/base_encoders.py`.
-For the real-world HTTP server, use the CLI options shown below; they are defined
-in `scripts/realworld/http_internvla_server.py`.
+For policy-based inference, set `device` and, optionally, `attn_implementation` in the
+model configuration consumed by `ModelCfg` in `internnav/configs/model/base_encoders.py`.
+The real-world HTTP server (`scripts/realworld/http_internvla_server.py`) always uses `auto`.
 
 Set `attn_implementation` (default `auto`):
 
@@ -54,7 +54,7 @@ model_path = 'checkpoints/InternVLA-N1-DualVLN'
 ```bash
 venv/bin/python -m scripts.realworld.http_internvla_server \
   --model_path checkpoints/InternVLA-N1-DualVLN \
-  --device xpu:0 --attn_implementation auto --plan_step_gap 4 --skip_warmup
+  --device xpu:0 --plan_step_gap 4 --skip_warmup
 ```
 
 The server listens on port 5801.

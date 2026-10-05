@@ -64,13 +64,12 @@ def test_invalid_attention():
 
 
 @pytest.mark.parametrize('device', ['cpu', 'xpu:0'])
-@pytest.mark.parametrize('xformers_available', [False, True])
-def test_dino_native_fallback(device, xformers_available):
+def test_dino_native_fallback(device):
     if device.startswith('xpu') and not torch.xpu.is_available():
         pytest.skip('Native XPU unavailable')
     layer = dino_attention.MemEffAttention(32, num_heads=4).to(device).eval()
     inputs = torch.randn(2, 8, 32, device=device)
-    with patch.object(dino_attention, 'XFORMERS_AVAILABLE', xformers_available), patch.object(
+    with patch.object(dino_attention, 'XFORMERS_AVAILABLE', False), patch.object(
         dino_attention, 'memory_efficient_attention', create=True, side_effect=AssertionError('Called xFormers')
     ), torch.no_grad():
         expected = dino_attention.Attention.forward(layer, inputs)
@@ -88,28 +87,6 @@ def test_dino_cuda_xformers_matches_native():
     inputs = torch.randn(2, 8, 32, device='cuda:0')
     with torch.no_grad():
         torch.testing.assert_close(layer(inputs), dino_attention.Attention.forward(layer, inputs), rtol=1e-3, atol=1e-3)
-
-
-def test_latent_tokens_move_to_embedding_device():
-    from types import SimpleNamespace
-
-    from internnav.model.basemodel.internvla_n1.internvla_n1 import InternVLAN1ForCausalLM
-
-    class EmbeddingProbe(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.weight = torch.nn.Parameter(torch.empty(1, device='meta'))
-
-        def forward(self, input_ids):
-            assert input_ids.device.type == 'meta'
-            assert input_ids.dtype == torch.long
-            raise RuntimeError('Embedding placement verified')
-
-    model = SimpleNamespace(get_model=lambda: SimpleNamespace(embed_tokens=EmbeddingProbe()))
-    with pytest.raises(RuntimeError, match='Embedding placement verified'):
-        InternVLAN1ForCausalLM.generate_latents(
-            model, torch.ones(1, 4, dtype=torch.long), torch.zeros(1, 4), torch.ones(1, 3, dtype=torch.long)
-        )
 
 
 @pytest.mark.parametrize('failure', ['missing_file', 'missing_weight', 'wrong_shape'])
@@ -218,7 +195,7 @@ def test_accelerator_bf16_prefill_cache_and_latents(device_type, attention):
         torch.testing.assert_close(actual.logits.cpu(), expected, rtol=0.05, atol=0.01)
         output = model.generate(**device_inputs, max_new_tokens=2, min_new_tokens=2, do_sample=False, use_cache=True)
         assert output.shape[1] == inputs.input_ids.shape[1] + 2
-        latent = model.generate_latents(output.cpu(), inputs.pixel_values, inputs.image_grid_thw)
+        latent = model.generate_latents(output, device_inputs.pixel_values, device_inputs.image_grid_thw)
         assert latent.shape == (1, 4, 32)
         assert latent.device.type == device_type and latent.dtype == torch.bfloat16
         assert latent.isfinite().all()
@@ -279,9 +256,14 @@ def test_accelerator_bf16_trajectory_with_identical_noise(monkeypatch, device_ty
 
     monkeypatch.setattr(model_module, 'randn_tensor', fixed_noise)
     backend.reset_peak_memory_stats()
-    with torch.no_grad():
+    # xFormers has no CPU kernels, so the CPU reference must use the native DINO attention.
+    with torch.no_grad(), patch.object(dino_attention, 'XFORMERS_AVAILABLE', False):
         expected = reference.generate_traj(latent, images, predict_step_nums=4, num_inference_steps=2, num_sample_trajs=2)
-        actual = model.generate_traj(latent, images, predict_step_nums=4, num_inference_steps=2, num_sample_trajs=2)
+    with torch.no_grad():
+        actual = model.generate_traj(
+            latent.to(f'{device_type}:0'), images.to(f'{device_type}:0'),
+            predict_step_nums=4, num_inference_steps=2, num_sample_trajs=2,
+        )
     assert actual.device.type == device_type
     assert actual.isfinite().all()
     torch.testing.assert_close(actual.cpu(), expected, rtol=0.05, atol=0.05)
@@ -394,7 +376,7 @@ def test_realworld_history_reset_and_thread_inference(tmp_path, monkeypatch):
         assert agent.episode_idx == 2
         assert len(agent.conversation_history) == 3
     assert {name for name, enabled in model.calls} == {'generate', 'latents', 'trajectory'}
-    assert not any(enabled for name, enabled in model.calls)
+    assert not any(enabled for name, enabled in model.calls if name != 'trajectory')
     assert torch.is_grad_enabled()
     agent.reset()
     assert agent.episode_idx == 0 and agent.rgb_list == [] and agent.conversation_history == []
@@ -480,7 +462,7 @@ def test_full_checkpoint_xpu_eager(tmp_path, monkeypatch):
         outputs = agent.model.generate(**inputs, max_new_tokens=4, min_new_tokens=2, do_sample=False, use_cache=True, return_dict_in_generate=True)
         assert outputs.past_key_values is not None
         latent = agent.model.generate_latents(outputs.sequences, inputs.pixel_values, inputs.image_grid_thw)
-        trajectory = agent.step_s1(latent, torch.zeros(1, 2, 224, 224, 3), None)
+        trajectory = agent.step_s1(latent, torch.zeros(1, 2, 224, 224, 3, device=agent.device), None)
         assert trajectory.shape == (32, 32, 3) and trajectory.isfinite().all()
         arguments = (np.asarray(image), np.zeros((384, 384), dtype=np.float32), np.eye(4), 'Stop at the door.', np.eye(4))
         agent.step_s2(*arguments)

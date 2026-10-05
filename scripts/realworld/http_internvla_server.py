@@ -81,7 +81,6 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--attn_implementation", choices=['auto', 'flash_attention_2', 'sdpa', 'eager'], default='auto')
     parser.add_argument("--model_path", type=str, default="checkpoints/InternVLA-N1")
     parser.add_argument("--resize_w", type=int, default=384)
     parser.add_argument("--resize_h", type=int, default=384)

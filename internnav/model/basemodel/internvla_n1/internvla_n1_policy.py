@@ -10,11 +10,11 @@ from PIL import Image
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedModel
 
 from internnav.configs.model.base_encoders import ModelCfg
-from internnav.model.utils.inference_device import resolve_inference_device
 from internnav.model.basemodel.internvla_n1.internvla_n1 import (
     InternVLAN1ForCausalLM,
     InternVLAN1ModelConfig,
 )
+from internnav.model.utils.inference_device import resolve_inference_device
 from internnav.model.utils.vln_utils import (
     S1Output,
     S2Output,
@@ -32,7 +32,7 @@ class InternVLAN1Net(PreTrainedModel):
         self.model_config = ModelCfg(**config.model_cfg['model'])
 
         device, attention = resolve_inference_device(
-            self.model_config.device, self.model_config.attn_implementation
+            self.model_config.device, getattr(self.model_config, 'attn_implementation', 'auto')
         )
         self.model = InternVLAN1ForCausalLM.from_pretrained(
             self.model_config.model_path,

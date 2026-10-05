@@ -26,9 +26,7 @@ DEFAULT_IMAGE_TOKEN = "<image>"
 
 class InternVLAN1AsyncAgent:
     def __init__(self, args):
-        self.device, attention = resolve_inference_device(
-            args.device, getattr(args, 'attn_implementation', 'auto')
-        )
+        self.device, attention = resolve_inference_device(args.device, getattr(args, 'attn_implementation', 'auto'))
         self.save_dir = "test_data/" + datetime.now().strftime("%Y%m%d_%H%M%S")
         print(f"args.model_path{args.model_path}")
         self.model = InternVLAN1ForCausalLM.from_pretrained(
@@ -255,7 +253,6 @@ class InternVLAN1AsyncAgent:
             action_seq = self.parse_actions(self.llm_output)
             return action_seq, None, None
 
-    @torch.no_grad()
     def step_s1(self, latent, rgb, depth):
         all_trajs = self.model.generate_traj(latent, rgb, depth)
         return all_trajs
