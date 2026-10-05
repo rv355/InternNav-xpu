@@ -15,12 +15,11 @@ venv/bin/python -m pip check
 venv/bin/python -c "import torch; assert torch.xpu.is_available(); print(torch.__version__); print(torch.xpu.get_device_properties(0)); print(torch.xpu.mem_get_info(0))"
 ```
 
-Do not install XPU packages into a CUDA environment. Keep `diffusers==0.32.2`;
-newer versions fail to load the checkpoint with a `size mismatch` error.
+Do not install `xformers` or `flash-attn` in this environment. Keep `diffusers==0.32.2`.
 
 ## Auxiliary checkpoint
 
-The DualVLN asynchronous RGB path requires this checkpoint:
+Download the Depth Anything V2 checkpoint into `checkpoints/`:
 
 ```bash
 curl -fL --retry 2 -o checkpoints/depth_anything_v2_metric_hypersim_vits.pth \
@@ -30,11 +29,8 @@ sha256sum checkpoints/depth_anything_v2_metric_hypersim_vits.pth
 
 ## Configuration
 
-For policy-based inference, set `device` and, optionally, `attn_implementation` in the
-model configuration consumed by `ModelCfg` in `internnav/configs/model/base_encoders.py`.
-The real-world HTTP server (`scripts/realworld/http_internvla_server.py`) always uses `auto`.
-
-Set `attn_implementation` (default `auto`):
+Set `device` and, optionally, `attn_implementation` (default `auto`) in the model
+configuration. The real-world HTTP server uses `auto`.
 
 | Device | `auto` | Other selections |
 | --- | --- | --- |
@@ -68,4 +64,10 @@ Model weights alone need 15.62 GiB of free GPU memory; inference requires more.
 ```bash
 venv/bin/python -m pip install pytest
 INTERNNAV_FULL_XPU_TEST=1 venv/bin/python -m pytest tests/unit_test/test_xpu_inference.py -q -s
+```
+
+CUDA equivalence tests, in a CUDA environment:
+
+```bash
+python -m pytest tests/unit_test/test_xpu_inference.py -q -rs -k "accelerator or cuda"
 ```
