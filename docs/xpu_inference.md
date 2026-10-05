@@ -29,21 +29,24 @@ sha256sum checkpoints/depth_anything_v2_metric_hypersim_vits.pth
 
 ## Configuration
 
-Set `device` and, optionally, `attn_implementation` (default `auto`) in the model
-configuration. The real-world HTTP server uses `auto`.
+Set `device` and, optionally, `attn_implementation` (default `auto`) in `model_settings`
+of the evaluation config, e.g. `scripts/eval/configs/h1_internvla_n1_async_cfg.py`:
+
+```python
+model_settings={
+    ...
+    'model_path': 'checkpoints/InternVLA-N1-DualVLN',
+    'device': 'xpu:0',
+    'attn_implementation': 'auto',
+}
+```
 
 | Device | `auto` | Other selections |
 | --- | --- | --- |
 | CUDA | `flash_attention_2` | `sdpa`, `eager` |
 | XPU | `sdpa` | `eager`; `flash_attention_2` is not supported |
 
-Policy configuration example:
-
-```python
-device = 'xpu:0'
-attn_implementation = 'auto'
-model_path = 'checkpoints/InternVLA-N1-DualVLN'
-```
+The real-world HTTP server uses `auto`.
 
 ## Launch
 
