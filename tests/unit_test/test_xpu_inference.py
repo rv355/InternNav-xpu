@@ -7,6 +7,13 @@ from internnav.model.utils.inference_device import resolve_inference_device
 from internnav.model.encoder.depth_anything.depth_anything_v2.dinov2_layers import attention as dino_attention
 
 
+def _require_accelerator(device_type):
+    backend = getattr(torch, device_type, None)
+    if backend is None or not backend.is_available():
+        pytest.skip(f'{device_type} unavailable')
+    return backend
+
+
 def test_cuda_default_attention():
     device, attention = resolve_inference_device('cuda:0')
     assert str(device) == 'cuda:0'
@@ -61,6 +68,17 @@ def test_dino_native_fallback(device, xformers_available):
         torch.testing.assert_close(layer(inputs), expected)
         with pytest.raises(AssertionError, match='nested tensors'):
             layer(inputs, attn_bias=object())
+
+
+def test_dino_cuda_xformers_matches_native():
+    _require_accelerator('cuda')
+    if not dino_attention.XFORMERS_AVAILABLE:
+        pytest.skip('xFormers unavailable')
+    torch.manual_seed(3)
+    layer = dino_attention.MemEffAttention(32, num_heads=4).to('cuda:0').eval()
+    inputs = torch.randn(2, 8, 32, device='cuda:0')
+    with torch.no_grad():
+        torch.testing.assert_close(layer(inputs), dino_attention.Attention.forward(layer, inputs), rtol=1e-3, atol=1e-3)
 
 
 def test_latent_tokens_move_to_embedding_device():
@@ -132,8 +150,9 @@ def test_auxiliary_checkpoint_restores_weights(tmp_path, monkeypatch):
     torch.testing.assert_close(rgb.bias, weights['pretrained.bias'])
 
 
-@pytest.mark.parametrize('attention', ['sdpa', 'eager'])
-def test_xpu_bf16_prefill_cache_and_latents(attention):
+@pytest.mark.parametrize('device_type', ['xpu', 'cuda'])
+@pytest.mark.parametrize('attention', ['auto', 'sdpa', 'eager'])
+def test_accelerator_bf16_prefill_cache_and_latents(device_type, attention):
     import copy
     from pathlib import Path
 
@@ -145,9 +164,13 @@ def test_xpu_bf16_prefill_cache_and_latents(attention):
         InternVLAN1ModelConfig,
     )
 
+    backend = _require_accelerator(device_type)
     checkpoint = Path(__file__).resolve().parents[2] / 'checkpoints/InternVLA-N1-DualVLN'
-    if not torch.xpu.is_available() or not (checkpoint / 'preprocessor_config.json').exists():
-        pytest.skip('Requires native XPU and local DualVLN processor')
+    if not (checkpoint / 'preprocessor_config.json').exists():
+        pytest.skip('Requires local DualVLN processor')
+    device, attention = resolve_inference_device(f'{device_type}:0', attention)
+    if attention == 'flash_attention_2':
+        pytest.importorskip('flash_attn')
     config = InternVLAN1ModelConfig(
         vocab_size=152064, hidden_size=32, intermediate_size=64,
         num_hidden_layers=1, num_attention_heads=4, num_key_value_heads=2,
@@ -171,15 +194,15 @@ def test_xpu_bf16_prefill_cache_and_latents(attention):
     model = InternVLAN1ForCausalLM(device_config).eval().to(torch.bfloat16)
     model.model.latent_queries = torch.nn.Parameter(torch.empty(1, 4, 32, dtype=torch.bfloat16))
     model.load_state_dict(reference.state_dict())
-    model.to('xpu:0')
+    model.to(device)
     processor = AutoProcessor.from_pretrained(checkpoint, min_pixels=784, max_pixels=784, local_files_only=True)
     messages = [{'role': 'user', 'content': [{'type': 'image'}, {'type': 'text', 'text': 'Stop at the door.'}]}]
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = processor(text=[text], images=[Image.new('RGB', (28, 28), color='green')], return_tensors='pt')
-    torch.xpu.reset_peak_memory_stats()
+    backend.reset_peak_memory_stats()
     with torch.no_grad():
         expected = reference(**inputs, use_cache=True).logits
-        device_inputs = copy.deepcopy(inputs).to('xpu:0')
+        device_inputs = copy.deepcopy(inputs).to(device)
         actual = model(**device_inputs, use_cache=True)
         assert actual.past_key_values is not None
         torch.testing.assert_close(actual.logits.cpu(), expected, rtol=0.05, atol=0.01)
@@ -187,14 +210,15 @@ def test_xpu_bf16_prefill_cache_and_latents(attention):
         assert output.shape[1] == inputs.input_ids.shape[1] + 2
         latent = model.generate_latents(output.cpu(), inputs.pixel_values, inputs.image_grid_thw)
         assert latent.shape == (1, 4, 32)
-        assert latent.device.type == 'xpu' and latent.dtype == torch.bfloat16
+        assert latent.device.type == device_type and latent.dtype == torch.bfloat16
         assert latent.isfinite().all()
     assert device_inputs.input_ids.dtype == torch.long
     assert device_inputs.image_grid_thw.dtype == torch.long
-    print(f'{attention} tiny Qwen peak allocated bytes: {torch.xpu.max_memory_allocated()}')
+    print(f'{device_type} {attention} tiny Qwen peak allocated bytes: {backend.max_memory_allocated()}')
 
 
-def test_xpu_bf16_trajectory_with_identical_noise(monkeypatch):
+@pytest.mark.parametrize('device_type', ['xpu', 'cuda'])
+def test_accelerator_bf16_trajectory_with_identical_noise(monkeypatch, device_type):
     import copy
     from pathlib import Path
     from types import SimpleNamespace
@@ -202,9 +226,10 @@ def test_xpu_bf16_trajectory_with_identical_noise(monkeypatch):
     from internnav.model.basemodel.internvla_n1 import internvla_n1 as model_module
     from internnav.model.basemodel.internvla_n1 import internvla_n1_arch as arch
 
+    backend = _require_accelerator(device_type)
     checkpoint_dir = Path(__file__).resolve().parents[2] / 'checkpoints'
-    if not torch.xpu.is_available() or not (checkpoint_dir / 'depth_anything_v2_metric_hypersim_vits.pth').exists():
-        pytest.skip('Requires native XPU and auxiliary pretrained checkpoint')
+    if not (checkpoint_dir / 'depth_anything_v2_metric_hypersim_vits.pth').exists():
+        pytest.skip('Requires auxiliary pretrained checkpoint')
     monkeypatch.setattr(arch, 'MODEL_PATH_TO', str(checkpoint_dir))
 
     class TrajectoryModel(torch.nn.Module):
@@ -233,7 +258,7 @@ def test_xpu_bf16_trajectory_with_identical_noise(monkeypatch):
 
     torch.manual_seed(11)
     reference = TrajectoryModel().eval().to(torch.bfloat16)
-    model = copy.deepcopy(reference).to('xpu:0')
+    model = copy.deepcopy(reference).to(f'{device_type}:0')
     noise = torch.randn(2, 4, 3, dtype=torch.bfloat16)
     latent = torch.randn(1, 4, 3584, dtype=torch.bfloat16)
     images = torch.rand(1, 2, 224, 224, 3, dtype=torch.float64)
@@ -243,14 +268,14 @@ def test_xpu_bf16_trajectory_with_identical_noise(monkeypatch):
         return noise.clone().to(device=device, dtype=dtype)
 
     monkeypatch.setattr(model_module, 'randn_tensor', fixed_noise)
-    torch.xpu.reset_peak_memory_stats()
+    backend.reset_peak_memory_stats()
     with torch.no_grad():
         expected = reference.generate_traj(latent, images, predict_step_nums=4, num_inference_steps=2, num_sample_trajs=2)
         actual = model.generate_traj(latent, images, predict_step_nums=4, num_inference_steps=2, num_sample_trajs=2)
-    assert actual.device.type == 'xpu'
+    assert actual.device.type == device_type
     assert actual.isfinite().all()
     torch.testing.assert_close(actual.cpu(), expected, rtol=0.05, atol=0.05)
-    print(f'Trajectory peak allocated bytes: {torch.xpu.max_memory_allocated()}')
+    print(f'{device_type} trajectory peak allocated bytes: {backend.max_memory_allocated()}')
 
 
 def test_traj_dit_shapes_match_checkpoint():
