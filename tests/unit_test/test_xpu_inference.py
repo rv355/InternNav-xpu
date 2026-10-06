@@ -253,6 +253,30 @@ def test_xpu_bf16_trajectory_with_identical_noise(monkeypatch):
     print(f'Trajectory peak allocated bytes: {torch.xpu.max_memory_allocated()}')
 
 
+def test_traj_dit_shapes_match_checkpoint():
+    import json
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from internnav.model.basemodel.internvla_n1.nextdit_crossattn_traj import NextDiTCrossAttn, NextDiTCrossAttnConfig
+
+    checkpoint = Path(__file__).resolve().parents[2] / 'checkpoints/InternVLA-N1-DualVLN'
+    index_path = checkpoint / 'model.safetensors.index.json'
+    if not index_path.exists():
+        pytest.skip('Local DualVLN checkpoint unavailable')
+    prefix = 'model.traj_dit.'
+    weight_map = {k: f for k, f in json.loads(index_path.read_text())['weight_map'].items() if k.startswith(prefix)}
+    model_shapes = {
+        prefix + k: tuple(v.shape) for k, v in NextDiTCrossAttn(NextDiTCrossAttnConfig(latent_embedding_size=768)).state_dict().items()
+    }
+    checkpoint_shapes = {}
+    for key, file in weight_map.items():
+        with safe_open(checkpoint / file, 'pt') as shard:
+            checkpoint_shapes[key] = tuple(shard.get_slice(key).get_shape())
+    assert model_shapes == checkpoint_shapes
+
+
 def test_diffusers_checkpointing_toggle_compatibility():
     from internnav.model.basemodel.internvla_n1.nextdit_crossattn_traj import NextDiTCrossAttn, NextDiTCrossAttnConfig
 
