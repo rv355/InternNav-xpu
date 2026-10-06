@@ -14,6 +14,15 @@ def _require_accelerator(device_type):
     return backend
 
 
+def _require_supported_transformers():
+    import transformers
+    from packaging.version import Version
+
+    # Transformers 4.52 restructured Qwen2.5-VL modules that InternVLA-N1 builds on.
+    if Version(transformers.__version__).release[:2] != (4, 51):
+        pytest.skip(f'InternVLA-N1 requires transformers==4.51.0 (installed {transformers.__version__})')
+
+
 def test_cuda_default_attention():
     device, attention = resolve_inference_device('cuda:0')
     assert str(device) == 'cuda:0'
@@ -165,6 +174,7 @@ def test_accelerator_bf16_prefill_cache_and_latents(device_type, attention):
     )
 
     backend = _require_accelerator(device_type)
+    _require_supported_transformers()
     checkpoint = Path(__file__).resolve().parents[2] / 'checkpoints/InternVLA-N1-DualVLN'
     if not (checkpoint / 'preprocessor_config.json').exists():
         pytest.skip('Requires local DualVLN processor')
@@ -442,6 +452,7 @@ def test_full_checkpoint_xpu_eager(tmp_path, monkeypatch):
         pytest.skip('Set INTERNNAV_FULL_XPU_TEST=1 for full checkpoint validation')
     if not torch.xpu.is_available():
         pytest.skip('Native XPU unavailable')
+    _require_supported_transformers()
     root = Path(__file__).resolve().parents[2]
     checkpoint = root / 'checkpoints/InternVLA-N1-DualVLN'
     index = json.loads((checkpoint / 'model.safetensors.index.json').read_text())
