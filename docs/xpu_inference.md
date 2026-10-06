@@ -1,7 +1,6 @@
 # Optional Intel XPU eager inference
 
-Experimental eager inference for InternVLA-N1-DualVLN on Intel GPUs. Simulator
-and robot-stack integrations are not covered.
+Eager inference for InternVLA-N1-DualVLN on Intel GPUs.
 
 ## Installation
 
@@ -20,7 +19,7 @@ newer versions fail to load the checkpoint with a `size mismatch` error.
 
 ## Auxiliary checkpoint
 
-Download the Depth Anything V2 checkpoint:
+The DualVLN asynchronous RGB path requires this checkpoint:
 
 ```bash
 curl -fL --retry 2 -o checkpoints/depth_anything_v2_metric_hypersim_vits.pth \
@@ -28,9 +27,12 @@ curl -fL --retry 2 -o checkpoints/depth_anything_v2_metric_hypersim_vits.pth \
 sha256sum checkpoints/depth_anything_v2_metric_hypersim_vits.pth
 ```
 
-Expected SHA256: `b782898d8a3e8be1f639de33837ed85e9b4b73e40f8f5e5cd99067588d722545`.
-
 ## Configuration
+
+For policy-based inference, set `device` and `attn_implementation` in the model
+configuration consumed by `ModelCfg` in `internnav/configs/model/base_encoders.py`.
+For the real-world HTTP server, use the CLI options shown below; they are defined
+in `scripts/realworld/http_internvla_server.py`.
 
 Set `attn_implementation` (default `auto`):
 
